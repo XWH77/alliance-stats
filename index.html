@@ -160,6 +160,7 @@ th.l,td.l{text-align:left}
 .seg{display:inline-flex;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:3px}
 .seg button{background:transparent;border:none;border-radius:999px;padding:6px 14px;font-size:13px;color:var(--dim);cursor:pointer}
 .seg button.on{background:linear-gradient(180deg,#e8d5a8,#c9a96e);color:#1a1409;font-weight:600}
+.seg button:disabled{opacity:.35;cursor:not-allowed}
 .search{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:8px 14px;font-size:13px;outline:none;min-width:150px}
 .search::placeholder{color:var(--dim)}
 
@@ -268,6 +269,7 @@ input[type=date],#impText{
 
 <div class="toast" id="toast"></div>
 
+<script src="data.js"></script>
 <script>
 /* ================= 工具 ================= */
 const $ = (s, r = document) => r.querySelector(s);
@@ -277,9 +279,9 @@ const dstr = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-
 const WEEK = ['星期日','星期一','星期二','星期三','星期四','星期五','星期六'];
 
 /* ================= 数据层 ================= */
-const KEY = 'alliance_stats_v1';
-let db = { records: [], imports: [], demo: true, seeded: false };
-let view = { page: 'dash', date: null, mode: 'today', q: '' };
+const KEY = 'alliance_stats_v2';
+let db = { records: [], imports: [], snapshot: false };
+let view = { page: 'dash', date: null, mode: 'week', q: '' };
 let S = null;                       // 派生缓存
 const bump = () => { S = null; };
 
@@ -288,13 +290,23 @@ function load() {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const o = JSON.parse(raw);
-      if (o && Array.isArray(o.records)) {
-        db = { records: o.records, imports: o.imports || [], demo: !!o.demo, seeded: true };
+      if (o && Array.isArray(o.records) && o.records.length) {
+        db = { records: o.records, imports: o.imports || [], snapshot: !!o.snapshot };
         return;
       }
     }
   } catch (e) { /* 忽略损坏数据 */ }
-  seedDemo(true);
+  seedFromSnapshot();
+}
+
+/* 内置快照（data.js） */
+function seedFromSnapshot() {
+  const snap = window.SNAPSHOT;
+  if (!snap || !Array.isArray(snap.rows)) { persist(); return; }
+  db = {
+    records: snap.rows.map(([n, c, w, a, st, p]) => ({ d: snap.date, n, c, w, a, st, p })),
+    imports: [], snapshot: true
+  };
   persist();
 }
 
@@ -335,7 +347,7 @@ function snapshot(date) {
     const p = prev ? latestRec(name, prev) : null;
     const inc  = p ? (r.w < p.w ? r.w : r.w - p.w) : 0;
     const ainc = p ? (r.a < p.a ? r.a : r.a - p.a) : 0;
-    out.set(name, { name, clan: r.c, w: r.w, a: r.a, inc, ainc, base: !!p });
+    out.set(name, { name, clan: r.c, w: r.w, a: r.a, st: r.st, p: r.p, inc, ainc, base: !!p });
   }
   return { date, members: out, prev };
 }
@@ -359,27 +371,14 @@ function totalsAll() {
   return res;
 }
 
-/* ================= 示例数据 ================= */
-function seedDemo(silent) {
-  const clans = ['魏·天策', '蜀·卧龙', '吴·江东', '群·无双'];
-  const given = ['曹操','张辽','夏侯惇','郭嘉','许褚','刘备','关羽','张飞','赵云','诸葛亮',
-                 '孙权','周瑜','陆逊','甘宁','吕布','貂蝉','袁绍','华雄','张角'];
-  const recs = [];
-  const wk = {};                     // 成员本周累计
-  const today = new Date();
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(today); d.setDate(d.getDate() - i);
-    const ds = dstr(d);
-    const mon = d.getDay() === 1;
-    given.forEach((n, k) => {
-      const inc = Math.round(180 + Math.random() * 1250);
-      if (wk[n] === undefined) wk[n] = mon ? inc : Math.round(2600 + Math.random() * 6200) + inc;
-      else wk[n] = mon ? inc : wk[n] + inc;
-      recs.push({ d: ds, n, c: clans[Math.floor(k / 5) % 4], w: wk[n], a: Math.round(wk[n] * 0.12) });
-    });
-  }
-  db = { records: recs, imports: [], demo: true, seeded: true };
-  if (!silent) { persist(); renderAll(); toast('已载入示例数据'); }
+/* ================= 快照恢复 ================= */
+function restoreSnapshot() {
+  seedFromSnapshot();
+  bump();
+  view.date = null;
+  if (dates().length < 2) view.mode = 'week';
+  renderAll();
+  toast('已恢复内置快照');
 }
 
 /* ================= 导入解析 ================= */
@@ -438,9 +437,11 @@ function parseCSV(text) {
   if (header) {
     idx.date = find('日期', '时间', 'date');
     idx.name = find('成员', '姓名', '玩家', '名字', '昵称', 'name');
-    idx.clan = find('门阀', '同盟', '势力', '帮派', 'clan');
+    idx.clan = find('门阀', '同盟', '帮派', 'clan');
     idx.w    = find('战功', '击杀', '功勋', 'kills');
     idx.a    = find('助攻', 'assist');
+    idx.p    = find('势力值', '战力');
+    idx.st   = find('所属州', '州');
   } else {
     idx.name = 0; idx.clan = 1; idx.w = 2; idx.a = 3;
   }
@@ -455,7 +456,9 @@ function parseCSV(text) {
       n: name,
       c: (idx.clan >= 0 ? r[idx.clan] : '').trim() || '未分门阀',
       w: parseNum(idx.w >= 0 ? r[idx.w] : 0),
-      a: parseNum(idx.a >= 0 ? r[idx.a] : 0)
+      a: parseNum(idx.a >= 0 ? r[idx.a] : 0),
+      st: (idx.st >= 0 ? r[idx.st] : '').trim(),
+      p: parseNum(idx.p >= 0 ? r[idx.p] : 0)
     });
   }
   return { rows: out, skipped, error: null };
@@ -482,8 +485,8 @@ function renderAll() {
   }
   const badge = $('#dataBadge');
   badge.style.display = ds.length ? '' : 'none';
-  badge.textContent = db.demo ? '示例数据' : `已导入 ${db.records.length} 条`;
-  badge.classList.toggle('demo', db.demo);
+  badge.textContent = db.snapshot ? `快照 ${ds[ds.length-1]}` : `已导入 ${db.records.length} 条`;
+  badge.classList.toggle('demo', db.snapshot);
   renderPage();
 }
 function renderPage() {
@@ -497,88 +500,88 @@ function renderPage() {
 function renderDash() {
   const el = $('#page-dash');
   const ds = dates();
-  if (!ds.length) {
-    el.innerHTML = `<div class="panel empty"><p>还没有数据</p>
-      <p class="hint">导入每天的战功表格，就能看到排行、趋势和人员变动。</p>
-      <button class="btn primary" data-act="goAdmin">去管理中心</button></div>`;
-    return;
-  }
+  if (!ds.length) { el.innerHTML = emptyPanel(); return; }
   const snap = snapshot(view.date);
-  const prevSnap = snap.prev ? snapshot(snap.prev) : null;
+  const hasBase = !!snap.prev;
+  const list = [...snap.members.values()];
   let k = 0, a = 0, active = 0;
   const clans = new Set(), byClan = new Map();
-  for (const m of snap.members.values()) {
-    k += m.inc; a += m.ainc;
+  for (const m of list) {
+    const v = hasBase ? m.inc : m.w, va = hasBase ? m.ainc : m.a;
+    k += v; a += va;
     if (m.inc > 0) active++;
     clans.add(m.clan);
     const c = byClan.get(m.clan) || { name: m.clan, k: 0, a: 0, n: 0 };
-    c.k += m.inc; c.a += m.ainc; c.n++; byClan.set(m.clan, c);
+    c.k += v; c.a += va; c.n++; byClan.set(m.clan, c);
   }
-  let pk = 0;
-  if (prevSnap) for (const m of prevSnap.members.values()) pk += m.inc;
-  const delta = prevSnap ? k - pk : 0;
-  const deltaTxt = !prevSnap ? '无昨日基线' : (delta >= 0 ? `较昨日 +${fmt(delta)}` : `较昨日 ${fmt(delta)}`);
-  const last7 = ds.slice(-7);
-  const trend = last7.map(d => [...snapshot(d).members.values()].reduce((s, m) => s + m.inc, 0));
-  const top = [...snap.members.values()].sort((x, y) => y.inc - x.inc).slice(0, 5);
   const bars = [...byClan.values()].sort((x, y) => y.k - x.k);
   const maxBar = Math.max(...bars.map(b => b.k), 1);
+  const top = list.slice().sort((x, y) => (hasBase ? y.inc - x.inc : y.w - x.w)).slice(0, 5);
+  const last7 = ds.slice(-7);
+  const trend = last7.map(d => [...snapshot(d).members.values()].reduce((s, m) => s + m.inc, 0));
 
-  const changes = (() => {
-    if (!snap.prev) return { joined: [], left: [] };
-    const now = new Set(snap.members.keys());
-    const before = new Set(snapshot(snap.prev).members.keys());
-    return {
-      joined: [...now].filter(n => !before.has(n)),
-      left: [...before].filter(n => !now.has(n))
-    };
-  })();
-
-  el.innerHTML = `
-    <div class="cards">
+  let cards, chartPanel, changePanel;
+  if (hasBase) {
+    let pk = 0;
+    for (const m of snapshot(snap.prev).members.values()) pk += m.inc;
+    const delta = k - pk;
+    cards = `
       <div class="card"><div class="lbl">今日战功</div><div class="val">${fmt(k)}</div>
-        <div class="cap ${delta >= 0 ? 'up' : 'down'}">${deltaTxt}</div></div>
+        <div class="cap ${delta >= 0 ? 'up' : 'down'}">较昨日 ${delta >= 0 ? '+' : ''}${fmt(delta)}</div></div>
       <div class="card"><div class="lbl">今日助攻</div><div class="val">${fmt(a)}</div>
         <div class="cap">${snap.members.size} 名成员</div></div>
       <div class="card"><div class="lbl">活跃成员</div><div class="val">${active}</div>
         <div class="cap">有战功增量</div></div>
       <div class="card"><div class="lbl">门阀总数</div><div class="val">${clans.size}</div>
-        <div class="cap">${view.date} ${WEEK[new Date(view.date + 'T00:00:00').getDay()]}</div></div>
-    </div>
+        <div class="cap">${view.date} ${WEEK[new Date(view.date + 'T00:00:00').getDay()]}</div></div>`;
+    chartPanel = `<div class="panel"><div class="panelHead"><h2>近 7 日战功趋势</h2><span class="hint">当日增量</span></div>${lineChart(trend, last7)}</div>`;
+    const before = new Set(snapshot(snap.prev).members.keys()), now = new Set(snap.members.keys());
+    const joined = [...now].filter(n => !before.has(n)), left = [...before].filter(n => !now.has(n));
+    changePanel = `<div class="panel"><div class="panelHead"><h2>人员变动</h2><span class="hint">对比 ${snap.prev}</span></div>
+      <div class="row" style="gap:22px;align-items:flex-start">
+        <div><p class="hint" style="margin-bottom:6px">新进 ${joined.length}</p>
+          <div class="row" style="gap:6px">${joined.map(n => `<span class="tag on">${esc(n)}</span>`).join('') || '<span class="muted" style="font-size:12px">无</span>'}</div></div>
+        <div><p class="hint" style="margin-bottom:6px">离开 ${left.length}</p>
+          <div class="row" style="gap:6px">${left.map(n => `<span class="tag">${esc(n)}</span>`).join('') || '<span class="muted" style="font-size:12px">无</span>'}</div></div>
+      </div></div>`;
+  } else {
+    cards = `
+      <div class="card"><div class="lbl">本周战功</div><div class="val">${fmt(k)}</div>
+        <div class="cap">无昨日基线 · 本周累计</div></div>
+      <div class="card"><div class="lbl">本周助攻</div><div class="val">${fmt(a)}</div>
+        <div class="cap">${snap.members.size} 名成员</div></div>
+      <div class="card"><div class="lbl">成员</div><div class="val">${snap.members.size}</div>
+        <div class="cap">${clans.size} 个门阀</div></div>
+      <div class="card"><div class="lbl">人均战功</div><div class="val">${fmt(Math.round(k / Math.max(snap.members.size, 1)))}</div>
+        <div class="cap">${view.date}</div></div>`;
+    const top10 = list.slice().sort((x, y) => y.w - x.w).slice(0, 10);
+    const mx = Math.max(...top10.map(m => m.w), 1);
+    chartPanel = `<div class="panel"><div class="panelHead"><h2>战功 TOP 10</h2><span class="hint">本周累计</span></div>
+      <div class="bars">${top10.map((m, i) => `
+        <div class="barRow"><div class="nm" title="${esc(m.name)}">${i + 1}. ${esc(m.name)}</div>
+          <div class="barTrack"><div class="barFill" style="width:${Math.max(2, m.w / mx * 100)}%"></div></div>
+          <div class="vv">${fmt(m.w)}</div></div>`).join('')}</div></div>`;
+    changePanel = `<div class="panel"><div class="panelHead"><h2>人员变动</h2><span class="hint">暂无对比</span></div>
+      <p class="hint">这是第一份快照。明天再导入一份，就能看到当日增量、新进和离开。</p></div>`;
+  }
 
-    <div class="panel">
-      <div class="panelHead"><h2>近 7 日战功趋势</h2><span class="hint">当日增量</span></div>
-      ${lineChart(trend, last7)}
-    </div>
-
+  el.innerHTML = `<div class="cards">${cards}</div>${chartPanel}
     <div class="two">
-      <div class="panel">
-        <div class="panelHead"><h2>门阀战功分布</h2><span class="hint">${view.date}</span></div>
+      <div class="panel"><div class="panelHead"><h2>门阀战功分布</h2><span class="hint">${view.date}</span></div>
         <div class="bars">${bars.map(b => `
           <div class="barRow"><div class="nm" title="${esc(b.name)}">${esc(b.name)}</div>
             <div class="barTrack"><div class="barFill" style="width:${Math.max(2, b.k / maxBar * 100)}%"></div></div>
             <div class="vv">${fmt(b.k)}</div></div>`).join('') || '<p class="hint">暂无门阀数据</p>'}
         </div>
       </div>
-      <div class="panel">
-        <div class="panelHead"><h2>今日 TOP 5</h2><span class="hint">战功增量</span></div>
+      <div class="panel"><div class="panelHead"><h2>${hasBase ? '今日' : '本周'} TOP 5</h2><span class="hint">${hasBase ? '战功增量' : '累计战功'}</span></div>
         <ol class="top5">${top.map((m, i) => `
           <li><span class="rk">${i + 1}</span>
             <span class="nm">${esc(m.name)}<small>${esc(m.clan)}</small></span>
-            <span class="vv">+${fmt(m.inc)}</span></li>`).join('') || '<p class="hint">暂无数据</p>'}
+            <span class="vv">${hasBase ? '+' : ''}${fmt(hasBase ? m.inc : m.w)}</span></li>`).join('') || '<p class="hint">暂无数据</p>'}
         </ol>
       </div>
-    </div>
-
-    <div class="panel">
-      <div class="panelHead"><h2>人员变动</h2><span class="hint">${snap.prev ? `对比 ${snap.prev}` : '没有前一天数据'}</span></div>
-      <div class="row" style="gap:22px;align-items:flex-start">
-        <div><p class="hint" style="margin-bottom:6px">新进 ${changes.joined.length}</p>
-          <div class="row" style="gap:6px">${changes.joined.map(n => `<span class="tag on">${esc(n)}</span>`).join('') || '<span class="muted" style="font-size:12px">无</span>'}</div></div>
-        <div><p class="hint" style="margin-bottom:6px">离开 ${changes.left.length}</p>
-          <div class="row" style="gap:6px">${changes.left.map(n => `<span class="tag">${esc(n)}</span>`).join('') || '<span class="muted" style="font-size:12px">无</span>'}</div></div>
-      </div>
-    </div>`;
+    </div>${changePanel}`;
 }
 
 /* ================= 渲染：排行 ================= */
@@ -587,46 +590,48 @@ function rankRows() {
   const tot = view.mode === 'total' ? totalsAll() : null;
   const rows = [];
   for (const m of snap.members.values()) {
-    let k = m.inc, a = m.ainc, w = m.w;
+    let k = m.inc, a = m.ainc;
     if (view.mode === 'week') { k = m.w; a = m.a; }
     if (view.mode === 'total') { const t = tot.get(m.name) || { k: 0, a: 0 }; k = t.k; a = t.a; }
-    rows.push({ name: m.name, clan: m.clan, k, a, w, active: m.inc > 0 });
+    rows.push({ name: m.name, clan: m.clan, k, a, st: m.st, p: m.p, active: m.inc > 0 });
   }
   return rows.sort((x, y) => y.k - x.k || y.a - x.a);
 }
 function renderRank() {
   const el = $('#page-rank');
   if (!dates().length) { el.innerHTML = emptyPanel(); return; }
+  const hasBase = !!snapshot(view.date).prev;
   const rows = rankRows();
   const maxK = Math.max(...rows.map(r => r.k), 1);
+  const label = view.mode === 'today' ? '今日战功' : view.mode === 'week' ? '本周战功' : '累计战功';
   el.innerHTML = `
     <div class="toolbar">
       <div class="seg" id="rankMode">
-        <button data-mode="today" class="${view.mode === 'today' ? 'on' : ''}">今日</button>
+        <button data-mode="today" class="${view.mode === 'today' ? 'on' : ''}" ${hasBase ? '' : 'disabled'}>今日</button>
         <button data-mode="week" class="${view.mode === 'week' ? 'on' : ''}">本周</button>
         <button data-mode="total" class="${view.mode === 'total' ? 'on' : ''}">累计</button>
       </div>
-      <input class="search" id="q" placeholder="搜索成员 / 门阀" value="${esc(view.q)}">
+      <input class="search" id="q" placeholder="搜索成员 / 门阀 / 州" value="${esc(view.q)}">
     </div>
     <div class="panel tableWrap">
       <table>
-        <thead><tr><th style="width:38px">#</th><th class="l">成员</th><th class="l">门阀</th>
-          <th>${view.mode === 'today' ? '今日战功' : view.mode === 'week' ? '本周战功' : '累计战功'}</th>
-          <th>助攻</th><th class="l" style="width:96px">占比</th></tr></thead>
+        <thead><tr><th style="width:38px">#</th><th class="l">成员</th><th>${label}</th>
+          <th>助攻</th><th>势力</th><th class="l" style="width:84px">占比</th></tr></thead>
         <tbody id="rankBody">${rows.length ? rows.map((r, i) => {
-          const show = !view.q || (r.name + r.clan).toLowerCase().includes(view.q.toLowerCase());
-          return `<tr data-name="${esc(r.name + ' ' + r.clan)}" ${show ? '' : 'hidden'}>
+          const show = !view.q || (r.name + r.clan + (r.st || '')).toLowerCase().includes(view.q.toLowerCase());
+          return `<tr data-name="${esc(r.name + ' ' + r.clan + ' ' + (r.st || ''))}" ${show ? '' : 'hidden'}>
             <td class="muted">${i + 1}</td>
-            <td class="l">${esc(r.name)} ${r.active ? '<span class="tag on">活跃</span>' : ''}</td>
-            <td class="l muted">${esc(r.clan)}</td>
+            <td class="l"><div>${esc(r.name)}${r.active && hasBase && view.mode === 'today' ? ' <span class="tag on">活跃</span>' : ''}</div>
+              <div class="muted" style="font-size:11.5px">${esc(r.clan)}${r.st ? ' · ' + esc(r.st) : ''}</div></td>
             <td>${fmt(r.k)}</td><td class="muted">${fmt(r.a)}</td>
+            <td class="muted">${r.p ? fmt(r.p) : '—'}</td>
             <td class="l"><div class="barTrack" style="height:6px"><div class="barFill" style="width:${Math.max(1, r.k / maxK * 100)}%"></div></div></td>
           </tr>`;
         }).join('') : '<tr><td colspan="6" class="muted" style="text-align:center;padding:22px">暂无数据</td></tr>'}
         </tbody>
       </table>
     </div>
-    <p class="hint">${view.mode === 'week' ? '本周战功取当日累计值；本周一会被识别为新一周。' : view.mode === 'total' ? '累计 = 每日增量之和，首次出现的成员没有基线，按 0 计。' : '今日战功 = 今日累计 − 昨日本周累计；累计回落视为新一周。'}</p>`;
+    <p class="hint">${view.mode === 'week' ? '本周战功为游戏内本周累计值。' : view.mode === 'total' ? '累计 = 每日增量之和；第一次出现时没有基线，按 0 计。' : '今日战功 = 今日累计 − 昨日本周累计；累计回落视为新一周。'}</p>`;
 }
 function emptyPanel() {
   return `<div class="panel empty"><p>还没有数据</p>
@@ -639,15 +644,18 @@ function renderClan() {
   const el = $('#page-clan');
   if (!dates().length) { el.innerHTML = emptyPanel(); return; }
   const snap = snapshot(view.date);
+  const hasBase = !!snap.prev;
   const map = new Map();
   for (const m of snap.members.values()) {
+    const v = hasBase ? m.inc : m.w, va = hasBase ? m.ainc : m.a;
     const c = map.get(m.clan) || { name: m.clan, n: 0, k: 0, a: 0, active: 0 };
-    c.n++; c.k += m.inc; c.a += m.ainc; if (m.inc > 0) c.active++;
+    c.n++; c.k += v; c.a += va; if (m.inc > 0) c.active++;
     map.set(m.clan, c);
   }
   const rows = [...map.values()].sort((x, y) => y.k - x.k);
   const total = rows.reduce((s, r) => s + r.k, 0) || 1;
   const maxK = Math.max(...rows.map(r => r.k), 1);
+  const label = hasBase ? '今日战功' : '本周战功';
   el.innerHTML = `
     <div class="panel">
       <div class="panelHead"><h2>门阀战功排行</h2><span class="hint">${view.date}</span></div>
@@ -659,7 +667,7 @@ function renderClan() {
     </div>
     <div class="panel tableWrap">
       <table>
-        <thead><tr><th class="l">门阀</th><th>人数</th><th>今日战功</th><th>助攻</th><th>人均</th><th>占比</th></tr></thead>
+        <thead><tr><th class="l">门阀</th><th>人数</th><th>${label}</th><th>助攻</th><th>人均</th><th>占比</th></tr></thead>
         <tbody>${rows.map(r => `<tr>
           <td class="l">${esc(r.name)}</td><td>${r.n}</td><td>${fmt(r.k)}</td>
           <td class="muted">${fmt(r.a)}</td><td class="muted">${fmt(Math.round(r.k / r.n))}</td>
@@ -705,7 +713,7 @@ function renderAdmin() {
         <button class="btn" data-act="exportCsv">导出 CSV</button>
         <button class="btn" data-act="exportJson">导出备份</button>
         <label class="fileBtn">恢复备份<input type="file" id="impJson" accept=".json"></label>
-        <button class="btn" data-act="seed">载入示例</button>
+        <button class="btn" data-act="snapshot">恢复内置快照</button>
         <button class="btn danger" data-act="clear">清空全部</button>
       </div>
       <p class="hint" style="margin-top:12px">数据只存在你这台设备的浏览器里（localStorage）。发给别人看是各自独立的一份，不会同步。</p>
@@ -789,14 +797,13 @@ function doImport() {
   const { rows, skipped, error } = parseCSV(text);
   if (error) { toast('解析失败：' + error); return; }
   if (!rows.length) { toast('没有解析到有效行'); return; }
-  const recs = rows.map(r => ({ d: r.d || date, n: r.n, c: r.c, w: r.w, a: r.a }));
+  const recs = rows.map(r => ({ d: r.d || date, n: r.n, c: r.c, w: r.w, a: r.a, st: r.st, p: r.p }));
   const touched = new Set(recs.map(r => r.d));
-  if (db.demo) { db.records = []; db.imports = []; }   // 首次导入真实数据时清掉示例
   if (overwrite) db.records = db.records.filter(r => !touched.has(r.d));
   db.records = db.records.concat(recs);
   db.imports.unshift({ date: [...touched].sort().join(' ~ '), count: recs.length, at: new Date().toISOString() });
   db.imports = db.imports.slice(0, 60);
-  db.demo = false;
+  db.snapshot = false;
   persist(); bump();
   $('#impText').value = '';
   view.date = [...touched].sort().pop();
@@ -817,15 +824,15 @@ document.addEventListener('click', e => {
   else if (a === 'import') doImport();
   else if (a === 'clear') {
     if (!confirm('清空全部数据？包括导入记录，操作不可撤销。')) return;
-    db = { records: [], imports: [], demo: false, seeded: true };
+    db = { records: [], imports: [], snapshot: false };
     persist(); bump(); view.date = null; renderAll(); toast('已清空');
-  } else if (a === 'seed') {
+  } else if (a === 'snapshot') {
     if (db.records.length && !confirm('这会替换当前所有数据，继续？')) return;
-    seedDemo(false); view.date = null; renderAll();
+    restoreSnapshot();
   } else if (a === 'exportCsv') {
-    const head = '日期,成员,门阀,周战功,周助攻\n';
+    const head = '日期,成员,门阀,战功,助攻,势力值,所属州\n';
     const body = db.records.slice().sort((x, y) => x.d.localeCompare(y.d) || x.n.localeCompare(y.n))
-      .map(r => [r.d, r.n, r.c, r.w, r.a].join(',')).join('\n');
+      .map(r => [r.d, r.n, r.c, r.w, r.a, r.p || 0, r.st || ''].join(',')).join('\n');
     download('同盟战功数据.csv', head + body, 'text/csv;charset=utf-8');
   } else if (a === 'exportJson') {
     download('同盟战功备份-' + dstr(new Date()) + '.json', JSON.stringify(db, null, 2), 'application/json');
@@ -849,6 +856,7 @@ $('#dateSel').addEventListener('change', e => { view.date = e.target.value; rend
 
 /* ================= 启动 ================= */
 load();
+if (dates().length < 2) view.mode = 'week';
 renderAll();
 </script>
 </body>
