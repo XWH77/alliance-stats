@@ -293,6 +293,27 @@ html[data-theme="dark"] .seg button.on{background:#232b38;color:#fff}
 @media (prefers-reduced-motion:reduce){
   *{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
 }
+/* modal */
+.modal{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(12,16,24,.55);backdrop-filter:blur(6px);animation:fade .2s both}
+.modal[hidden]{display:none}
+.modalCard{width:100%;max-width:520px;max-height:86vh;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:0 30px 70px -24px rgba(9,14,26,.6);animation:rise .26s cubic-bezier(.2,.8,.2,1) both;overflow:hidden}
+.modalHead{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid var(--line)}
+.modalHead h3{font-size:15px;font-weight:650}
+.modalBody{padding:16px;overflow:auto}
+.posterImg{width:100%;display:block;border-radius:12px;border:1px solid var(--line)}
+.mHead{display:flex;flex-direction:column;gap:4px;margin-bottom:14px}
+.mName{font-size:20px;font-weight:700}
+.mGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mGrid>div{background:var(--panel2);border-radius:11px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.mGrid b{font-size:17px;font-variant-numeric:tabular-nums}
+.wList{display:flex;flex-direction:column;gap:10px}
+.wItem{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:12px;background:var(--panel2)}
+.wItem .wL{flex:1;font-size:13px;color:var(--dim)}
+.wItem .wN{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.wItem .wN.bad{color:var(--bad)}
+.linkBtn{background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;padding:4px 2px;white-space:nowrap}
+.linkBtn:hover{text-decoration:underline}
+#rankBody tr,.top5 li{cursor:pointer}
 </style>
 </head>
 <body>
@@ -324,8 +345,15 @@ html[data-theme="dark"] .seg button.on{background:#232b38;color:#fff}
   <section class="page on" id="page-dash"></section>
   <section class="page" id="page-rank"></section>
   <section class="page" id="page-clan"></section>
-  <p class="foot">数据保存在本机浏览器 · 换设备或清缓存不保留</p>
+  <p class="foot" id="footInfo"></p>
 </main>
+
+<div class="modal" id="modal" hidden>
+  <div class="modalCard">
+    <div class="modalHead"><h3 id="mTitle">详情</h3><button class="iconBtn" data-close aria-label="关闭">✕</button></div>
+    <div class="modalBody" id="mBody"></div>
+  </div>
+</div>
 
 <script src="data.js"></script>
 <script>
@@ -453,6 +481,9 @@ function renderAll() {
   badge.style.display = ds.length ? '' : 'none';
   badge.textContent = db.snapshot ? `快照 ${ds[ds.length-1]}` : '本地数据';
   badge.classList.toggle('demo', db.snapshot);
+  const t = (window.SNAPSHOT && window.SNAPSHOT.time) || '';
+  const fi = $('#footInfo');
+  if (fi) fi.textContent = ds.length ? `数据快照 ${ds[ds.length-1]}${t ? ' ' + t : ''} · 仅供同盟内部查看` : '数据尚未发布';
   renderPage();
 }
 function renderPage() {
@@ -530,7 +561,20 @@ function renderDash() {
       <p class="hint">这是第一份快照。明天再导入一份，就能看到当日增量、新进和离开。</p></div>`;
   }
 
-  el.innerHTML = `<div class="cards">${cards}</div>${chartPanel}
+  const w = watchData();
+  const watchPanel = `<div class="panel"><div class="panelHead"><h2>待关注</h2><span class="hint">本周战功</span></div>
+    <div class="wList">
+      <div class="wItem"><span class="wL">零战功</span><span class="wN ${w.zero.length ? 'bad' : ''}">${w.zero.length}</span>
+        <button class="linkBtn" data-act="watch" data-kind="zero">查看全部</button></div>
+      <div class="wItem"><span class="wL">低于门阀人均一半</span><span class="wN">${w.half.length}</span>
+        <button class="linkBtn" data-act="watch" data-kind="half">查看全部</button></div>
+    </div>
+    <p class="hint" style="margin-top:10px">${snap.prev ? '' : '只有一份快照，暂时只能看本周累计；连续未增长要等明天数据。'}</p>
+  </div>`;
+  el.innerHTML = `<div class="cards">${cards}</div>
+    <div class="row" style="justify-content:flex-end;margin:-2px 0 12px">
+      <button class="btn" data-act="poster">生成战报长图</button>
+    </div>${chartPanel}
     <div class="two">
       <div class="panel"><div class="panelHead"><h2>门阀战功分布</h2><span class="hint">${view.date}</span></div>
         <div class="bars">${bars.map((b, i) => `
@@ -541,12 +585,12 @@ function renderDash() {
       </div>
       <div class="panel"><div class="panelHead"><h2>${hasBase ? '今日' : '本周'} TOP 5</h2><span class="hint">${hasBase ? '战功增量' : '累计战功'}</span></div>
         <ol class="top5">${top.map((m, i) => `
-          <li><span class="rk">${i + 1}</span>
+          <li data-member="${esc(m.name)}"><span class="rk">${i + 1}</span>
             <span class="nm">${esc(m.name)}<small>${esc(m.clan)}</small></span>
             <span class="vv">${hasBase ? '+' : ''}${fmt(hasBase ? m.inc : m.w)}</span></li>`).join('') || '<p class="hint">暂无数据</p>'}
         </ol>
       </div>
-    </div>${changePanel}`;
+    </div>${changePanel}${watchPanel}`;
   el.querySelectorAll('.val[data-v]').forEach(n => countUp(n, Number(n.dataset.v)));
 }
 
@@ -587,7 +631,7 @@ function renderRank() {
           <th>助攻</th><th>势力</th></tr></thead>
         <tbody id="rankBody">${rows.length ? rows.map((r, i) => {
           const show = !view.q || (r.name + r.clan + (r.st || '')).toLowerCase().includes(view.q.toLowerCase());
-          return `<tr class="${i < 15 ? 'rowIn' : ''}" style="${i < 15 ? `animation-delay:${i * 14}ms` : ''}" data-name="${esc(r.name + ' ' + r.clan + ' ' + (r.st || ''))}" ${show ? '' : 'hidden'}>
+          return `<tr class="${i < 15 ? 'rowIn' : ''}" style="${i < 15 ? `animation-delay:${i * 14}ms` : ''}" data-member="${esc(r.name)}" data-name="${esc(r.name + ' ' + r.clan + ' ' + (r.st || ''))}" ${show ? '' : 'hidden'}>
             <td class="muted">${i + 1}</td>
             <td class="l"><div>${esc(r.name)}${r.active && hasBase && view.mode === 'today' ? ' <span class="tag on">活跃</span>' : ''}</div>
               <div class="muted" style="font-size:11.5px">${esc(r.clan)}${r.st ? ' · ' + esc(r.st) : ''}</div></td>
@@ -692,6 +736,206 @@ document.addEventListener('input', e => {
 });
 
 $('#dateSel').addEventListener('change', e => { view.date = e.target.value; renderAll(); });
+
+/* ================= 弹层 ================= */
+function openModal(title, html) {
+  $('#mTitle').textContent = title;
+  $('#mBody').innerHTML = html;
+  $('#modal').hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+function closeModal() {
+  $('#modal').hidden = true;
+  $('#mBody').innerHTML = '';
+  document.body.style.overflow = '';
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+/* ================= 成员详情 ================= */
+function showMember(name) {
+  const snap = snapshot(view.date);
+  const m = snap.members.get(name);
+  if (!m) return;
+  const list = [...snap.members.values()];
+  const rankAll = list.slice().sort((a, b) => b.w - a.w).findIndex(x => x.name === name) + 1;
+  const clanList = list.filter(x => x.clan === m.clan).sort((a, b) => b.w - a.w);
+  const rankClan = clanList.findIndex(x => x.name === name) + 1;
+  const clanK = clanList.reduce((s, x) => s + x.w, 0) || 1;
+  openModal('成员详情', `
+    <div class="mHead">
+      <div class="mName">${esc(m.name)}</div>
+      <div class="hint">${esc(m.clan)}${m.st ? ' · ' + esc(m.st) : ''}</div>
+    </div>
+    <div class="mGrid">
+      <div><span class="hint">本周战功</span><b>${fmt(m.w)}</b></div>
+      <div><span class="hint">本周助攻</span><b>${fmt(m.a)}</b></div>
+      <div><span class="hint">盟内排名</span><b>${rankAll} / ${list.length}</b></div>
+      <div><span class="hint">门阀内排名</span><b>${rankClan} / ${clanList.length}</b></div>
+      <div><span class="hint">势力值</span><b>${m.p ? fmt(m.p) : '—'}</b></div>
+      <div><span class="hint">占门阀战功</span><b>${(m.w / clanK * 100).toFixed(1)}%</b></div>
+    </div>
+    <p class="hint" style="margin-top:12px">${snap.prev ? '已有多天数据，后续可看每日增量。' : '目前只有一份快照，等有第二天数据后会显示每日增量。'}</p>
+  `);
+}
+
+/* ================= 待关注 ================= */
+function watchData() {
+  const snap = snapshot(view.date);
+  const list = [...snap.members.values()];
+  const acc = new Map();
+  for (const m of list) {
+    const a = acc.get(m.clan) || { k: 0, n: 0 };
+    a.k += m.w; a.n++; acc.set(m.clan, a);
+  }
+  const zero = list.filter(m => m.w === 0);
+  const half = list.filter(m => m.w > 0 && m.w < (acc.get(m.clan).k / acc.get(m.clan).n) * 0.5);
+  return { zero, half };
+}
+function showWatch(kind) {
+  const w = watchData();
+  const rows = kind === 'zero' ? w.zero : w.half;
+  openModal(kind === 'zero' ? `零战功（${rows.length} 人）` : `低于门阀人均一半（${rows.length} 人）`, `
+    <div class="tableWrap"><table>
+      <thead><tr><th style="width:34px">#</th><th class="l">成员</th><th class="l">门阀</th><th>战功</th></tr></thead>
+      <tbody>${rows.map((m, i) => `<tr><td class="muted">${i + 1}</td><td class="l">${esc(m.name)}</td>
+        <td class="l muted">${esc(m.clan)}</td><td>${fmt(m.w)}</td></tr>`).join('')}</tbody>
+    </table></div>
+  `);
+}
+
+/* ================= 战报长图 ================= */
+const POSTER_COLORS = ['#4f7cff','#10b3a3','#f59e0b','#8b5cf6','#ef4444','#0ea5c6','#84cc16','#64748b'];
+let posterCanvas = null;
+function rr(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+function drawPoster() {
+  const ds = dates();
+  if (!ds.length) return null;
+  const snap = snapshot(view.date);
+  const list = [...snap.members.values()];
+  const totalW = list.reduce((s, m) => s + m.w, 0);
+  const totalA = list.reduce((s, m) => s + m.a, 0);
+  const top = list.slice().sort((a, b) => b.w - a.w).slice(0, 10);
+  const cm = new Map();
+  for (const m of list) {
+    const c = cm.get(m.clan) || { name: m.clan, k: 0 };
+    c.k += m.w; cm.set(m.clan, c);
+  }
+  const clans = [...cm.values()].sort((a, b) => b.k - a.k);
+  const W = 1080, PAD = 64, BAND = 340, ROW = 74, CROW = 64;
+  const TOP_Y = BAND + 200;
+  const CLAN_Y = TOP_Y + 46 + top.length * ROW + 52;
+  const H = CLAN_Y + 34 + clans.length * CROW + 120;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H);
+  const bg = g.createLinearGradient(0, 0, W, BAND);
+  bg.addColorStop(0, '#3563ef'); bg.addColorStop(1, '#7a9dff');
+  g.fillStyle = bg;
+  g.beginPath();
+  g.moveTo(0, 0); g.lineTo(W, 0); g.lineTo(W, BAND - 44);
+  g.quadraticCurveTo(W, BAND, W - 44, BAND);
+  g.lineTo(44, BAND); g.quadraticCurveTo(0, BAND, 0, BAND - 44);
+  g.closePath(); g.fill();
+
+  const font = (size, weight, color) => {
+    g.font = `${weight || 400} ${size}px -apple-system,"PingFang SC","Noto Sans CJK SC",sans-serif`;
+    g.fillStyle = color;
+  };
+  font(46, 700, '#ffffff'); g.fillText('同盟战功统计看板', PAD, 112);
+  font(26, 400, 'rgba(255,255,255,.8)'); g.fillText(`${view.date} · 本周战功快照`, PAD, 158);
+  font(26, 400, 'rgba(255,255,255,.72)'); g.fillText('本周战功', PAD, 232);
+  font(84, 700, '#ffffff'); g.fillText(fmt(totalW), PAD, 316);
+
+  const sw = (W - PAD * 2) / 3;
+  [['本周助攻', fmt(totalA)], ['成员', String(list.length)], ['门阀', String(clans.length)]].forEach(([k, v], i) => {
+    const cx = PAD + i * sw;
+    if (i) { g.fillStyle = '#eef1f6'; g.fillRect(cx - 28, BAND + 26, 1, 66); }
+    font(22, 400, '#8b93a3'); g.fillText(k, cx, BAND + 52);
+    font(38, 700, '#1b2230'); g.fillText(v, cx, BAND + 98);
+  });
+  g.fillStyle = '#eef1f6'; g.fillRect(PAD, BAND + 150, W - PAD * 2, 1);
+
+  font(34, 700, '#1b2230'); g.fillText('战功 TOP 10', PAD, TOP_Y);
+  g.textAlign = 'right'; font(24, 400, '#6d7787'); g.fillText('本周累计', W - PAD, TOP_Y); g.textAlign = 'left';
+  const maxTop = Math.max(...top.map(t => t.w), 1);
+  top.forEach((m, i) => {
+    const y = TOP_Y + 46 + i * ROW;
+    const first = i === 0;
+    g.fillStyle = first ? '#3563ef' : '#f1f4fa';
+    g.beginPath(); g.arc(PAD + 18, y + 6, 18, 0, Math.PI * 2); g.fill();
+    g.textAlign = 'center';
+    font(22, 700, first ? '#ffffff' : '#6d7787'); g.fillText(String(i + 1), PAD + 18, y + 13);
+    g.textAlign = 'left';
+    font(30, 500, '#1b2230'); g.fillText(m.name, PAD + 56, y + 15);
+    const bx = PAD + 380, bw = 380;
+    g.fillStyle = '#f1f4fa'; rr(g, bx, y - 2, bw, 14, 7); g.fill();
+    g.fillStyle = POSTER_COLORS[i % POSTER_COLORS.length];
+    rr(g, bx, y - 2, Math.max(16, bw * m.w / maxTop), 14, 7); g.fill();
+    g.textAlign = 'right'; font(30, 600, '#1b2230'); g.fillText(fmt(m.w), W - PAD, y + 15); g.textAlign = 'left';
+  });
+
+  font(34, 700, '#1b2230'); g.fillText('门阀战功分布', PAD, CLAN_Y);
+  g.textAlign = 'right'; font(24, 400, '#6d7787'); g.fillText(`${clans.length} 个门阀`, W - PAD, CLAN_Y); g.textAlign = 'left';
+  const maxClan = Math.max(...clans.map(t => t.k), 1);
+  clans.forEach((m, i) => {
+    const y = CLAN_Y + 36 + i * CROW;
+    font(28, 500, '#1b2230'); g.fillText(m.name, PAD, y + 12);
+    const bx = PAD + 240, bw = 560;
+    g.fillStyle = '#f1f4fa'; rr(g, bx, y - 2, bw, 12, 6); g.fill();
+    g.fillStyle = POSTER_COLORS[i % POSTER_COLORS.length];
+    rr(g, bx, y - 2, Math.max(14, bw * m.k / maxClan), 12, 6); g.fill();
+    g.textAlign = 'right'; font(28, 600, '#1b2230'); g.fillText(fmt(m.k), W - PAD, y + 12); g.textAlign = 'left';
+  });
+
+  font(22, 400, '#98a2b3');
+  g.fillText('xwh77.github.io/alliance-stats', PAD, H - 52);
+  g.textAlign = 'right';
+  g.fillText('生成于 ' + new Date().toLocaleString('zh-CN', { hour12: false }), W - PAD, H - 52);
+  return c;
+}
+function showPoster() {
+  const c = drawPoster();
+  if (!c) return;
+  posterCanvas = c;
+  openModal('战报长图', `
+    <img class="posterImg" alt="战报长图" src="${c.toDataURL('image/png')}">
+    <p class="hint" style="margin:10px 0 12px">长按图片可直接保存到相册，或点下面的按钮下载。</p>
+    <div class="row"><button class="btn primary" data-act="savePoster">保存图片</button></div>
+  `);
+}
+function savePoster() {
+  if (!posterCanvas) return;
+  posterCanvas.toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `同盟战报-${view.date}.png`;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+  }, 'image/png');
+}
+
+/* 弹层交互 */
+document.addEventListener('click', e => {
+  if (e.target.closest('[data-close]') || e.target.id === 'modal') { closeModal(); return; }
+  const act = e.target.closest('[data-act]');
+  if (act) {
+    const a = act.dataset.act;
+    if (a === 'poster') { showPoster(); return; }
+    if (a === 'savePoster') { savePoster(); return; }
+    if (a === 'watch') { showWatch(act.dataset.kind); return; }
+  }
+  const mb = e.target.closest('[data-member]');
+  if (mb) showMember(mb.dataset.member);
+});
 
 /* ================= 动效 & 配色 ================= */
 function countUp(el, target) {
