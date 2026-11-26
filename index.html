@@ -285,13 +285,16 @@ let view = { page: 'dash', date: null, mode: 'week', q: '' };
 let S = null;                       // 派生缓存
 const bump = () => { S = null; };
 
+const snapKey = () => window.SNAPSHOT ? window.SNAPSHOT.date + ':' + window.SNAPSHOT.rows.length : '';
+
 function load() {
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const o = JSON.parse(raw);
       if (o && Array.isArray(o.records) && o.records.length) {
-        db = { records: o.records, imports: o.imports || [], snapshot: !!o.snapshot };
+        db = { records: o.records, imports: o.imports || [], snapshot: !!o.snapshot, key: o.key || '' };
+        if (db.snapshot && db.key !== snapKey()) { seedFromSnapshot(); return; }
         return;
       }
     }
@@ -305,7 +308,7 @@ function seedFromSnapshot() {
   if (!snap || !Array.isArray(snap.rows)) { persist(); return; }
   db = {
     records: snap.rows.map(([n, c, w, a, st, p]) => ({ d: snap.date, n, c, w, a, st, p })),
-    imports: [], snapshot: true
+    imports: [], snapshot: true, key: snapKey()
   };
   persist();
 }
