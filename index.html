@@ -176,11 +176,6 @@ th.l,td.l{text-align:left}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .row.end{justify-content:flex-end}
 label.fld{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--dim)}
-input[type=date],#impText{
-  background:var(--panel2);border:1px solid var(--line);border-radius:10px;
-  padding:9px 12px;font-size:13px;outline:none;color:var(--gold2);
-}
-#impText{width:100%;min-height:110px;resize:vertical;line-height:1.6;margin:12px 0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px}
 .fileBtn{
   display:inline-flex;align-items:center;gap:6px;
   background:var(--panel2);border:1px solid var(--line);border-radius:10px;
@@ -194,15 +189,6 @@ input[type=date],#impText{
 .empty{padding:34px 16px;text-align:center}
 .empty p{font-size:15px;margin-bottom:6px}
 .empty .hint{margin-bottom:16px}
-
-/* toast */
-.toast{
-  position:fixed;left:50%;bottom:96px;transform:translate(-50%,16px);
-  background:rgba(30,24,16,.96);border:1px solid rgba(201,169,110,.4);
-  color:var(--gold2);padding:10px 18px;border-radius:999px;font-size:13px;
-  opacity:0;pointer-events:none;transition:.25s;z-index:60;max-width:86vw;text-align:center;
-}
-.toast.on{opacity:1;transform:translate(-50%,0)}
 
 /* footer note */
 .foot{text-align:center;font-size:11px;color:var(--dim);padding:8px 0 30px}
@@ -256,18 +242,14 @@ input[type=date],#impText{
   <button data-page="dash" class="on">仪表盘</button>
   <button data-page="rank">全盟排行</button>
   <button data-page="clan">门阀排行</button>
-  <button data-page="admin">管理中心</button>
 </nav>
 
 <main>
   <section class="page on" id="page-dash"></section>
   <section class="page" id="page-rank"></section>
   <section class="page" id="page-clan"></section>
-  <section class="page" id="page-admin"></section>
   <p class="foot">数据保存在本机浏览器 · 换设备或清缓存不保留</p>
 </main>
-
-<div class="toast" id="toast"></div>
 
 <script src="data.js"></script>
 <script>
@@ -275,7 +257,6 @@ input[type=date],#impText{
 const $ = (s, r = document) => r.querySelector(s);
 const fmt = n => Number(n || 0).toLocaleString('zh-CN');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const dstr = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 const WEEK = ['星期日','星期一','星期二','星期三','星期四','星期五','星期六'];
 
 /* ================= 数据层 ================= */
@@ -283,7 +264,6 @@ const KEY = 'alliance_stats_v2';
 let db = { records: [], imports: [], snapshot: false };
 let view = { page: 'dash', date: null, mode: 'week', q: '' };
 let S = null;                       // 派生缓存
-const bump = () => { S = null; };
 
 const snapKey = () => window.SNAPSHOT ? window.SNAPSHOT.date + ':' + window.SNAPSHOT.rows.length : '';
 
@@ -374,99 +354,6 @@ function totalsAll() {
   return res;
 }
 
-/* ================= 快照恢复 ================= */
-function restoreSnapshot() {
-  seedFromSnapshot();
-  bump();
-  view.date = null;
-  if (dates().length < 2) view.mode = 'week';
-  renderAll();
-  toast('已恢复内置快照');
-}
-
-/* ================= 导入解析 ================= */
-function splitLine(line, delim) {
-  const out = []; let cur = ''; let q = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (q) {
-      if (c === '"' && line[i+1] === '"') { cur += '"'; i++; }
-      else if (c === '"') q = false;
-      else cur += c;
-    } else if (c === '"') q = true;
-    else if (c === delim) { out.push(cur); cur = ''; }
-    else cur += c;
-  }
-  out.push(cur);
-  return out.map(s => s.trim());
-}
-function parseNum(v) {
-  if (v == null) return 0;
-  let s = String(v).replace(/[,，\s]/g, '');
-  let mul = 1;
-  if (/亿$/.test(s)) mul = 1e8;
-  else if (/万$/.test(s)) mul = 1e4;
-  s = s.replace(/[亿万]$/, '');
-  const n = parseFloat(s.replace(/[^\d.\-]/g, ''));
-  return isNaN(n) ? 0 : Math.round(n * mul);
-}
-function parseDateStr(v) {
-  if (!v) return null;
-  const s = String(v).trim();
-  let m = s.match(/(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
-  if (m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
-  m = s.match(/^(\d{1,2})[-/月](\d{1,2})/);
-  if (m) { const y = new Date().getFullYear(); return `${y}-${String(m[1]).padStart(2,'0')}-${String(m[2]).padStart(2,'0')}`; }
-  m = s.match(/^(\d{4})(\d{2})(\d{2})$/);
-  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
-  return null;
-}
-function parseCSV(text) {
-  const lines = String(text).replace(/^\uFEFF/, '').split(/\r?\n/).filter(l => l.trim());
-  if (!lines.length) return { rows: [], skipped: 0, error: '内容是空的' };
-  const delim = lines[0].split('\t').length > lines[0].split(',').length ? '\t' : ',';
-  const rows = lines.map(l => splitLine(l, delim));
-  let header = null, start = 0;
-  if (rows[0].some(c => /成员|姓名|玩家|名字|昵称|name|日期|时间|date|门阀|同盟|势力|战功|击杀/i.test(c))) {
-    header = rows[0].map(c => c.trim());
-    start = 1;
-  }
-  const idx = {};
-  const find = (...keys) => {
-    if (!header) return -1;
-    for (let i = 0; i < header.length; i++) if (keys.some(k => header[i].includes(k))) return i;
-    return -1;
-  };
-  if (header) {
-    idx.date = find('日期', '时间', 'date');
-    idx.name = find('成员', '姓名', '玩家', '名字', '昵称', 'name');
-    idx.clan = find('门阀', '同盟', '帮派', 'clan');
-    idx.w    = find('战功', '击杀', '功勋', 'kills');
-    idx.a    = find('助攻', 'assist');
-    idx.p    = find('势力值', '战力');
-    idx.st   = find('所属州', '州');
-  } else {
-    idx.name = 0; idx.clan = 1; idx.w = 2; idx.a = 3;
-  }
-  if (idx.name < 0) return { rows: [], skipped: 0, error: '没找到“成员/姓名”这一列' };
-  const out = []; let skipped = 0;
-  for (let i = start; i < rows.length; i++) {
-    const r = rows[i];
-    const name = (r[idx.name] || '').trim();
-    if (!name) { skipped++; continue; }
-    out.push({
-      d: idx.date >= 0 ? parseDateStr(r[idx.date]) : null,
-      n: name,
-      c: (idx.clan >= 0 ? r[idx.clan] : '').trim() || '未分门阀',
-      w: parseNum(idx.w >= 0 ? r[idx.w] : 0),
-      a: parseNum(idx.a >= 0 ? r[idx.a] : 0),
-      st: (idx.st >= 0 ? r[idx.st] : '').trim(),
-      p: parseNum(idx.p >= 0 ? r[idx.p] : 0)
-    });
-  }
-  return { rows: out, skipped, error: null };
-}
-
 /* ================= 渲染：框架 ================= */
 function setPage(p) {
   view.page = p;
@@ -488,15 +375,14 @@ function renderAll() {
   }
   const badge = $('#dataBadge');
   badge.style.display = ds.length ? '' : 'none';
-  badge.textContent = db.snapshot ? `快照 ${ds[ds.length-1]}` : `已导入 ${db.records.length} 条`;
+  badge.textContent = db.snapshot ? `快照 ${ds[ds.length-1]}` : '本地数据';
   badge.classList.toggle('demo', db.snapshot);
   renderPage();
 }
 function renderPage() {
   if (view.page === 'dash') renderDash();
   else if (view.page === 'rank') renderRank();
-  else if (view.page === 'clan') renderClan();
-  else renderAdmin();
+  else renderClan();
 }
 
 /* ================= 渲染：仪表盘 ================= */
@@ -604,6 +490,9 @@ function renderRank() {
   const el = $('#page-rank');
   if (!dates().length) { el.innerHTML = emptyPanel(); return; }
   const hasBase = !!snapshot(view.date).prev;
+  const canTotal = dates().length > 1;
+  if (!hasBase && view.mode === 'today') view.mode = 'week';
+  if (!canTotal && view.mode === 'total') view.mode = 'week';
   const rows = rankRows();
   const maxK = Math.max(...rows.map(r => r.k), 1);
   const label = view.mode === 'today' ? '今日战功' : view.mode === 'week' ? '本周战功' : '累计战功';
@@ -612,7 +501,7 @@ function renderRank() {
       <div class="seg" id="rankMode">
         <button data-mode="today" class="${view.mode === 'today' ? 'on' : ''}" ${hasBase ? '' : 'disabled'}>今日</button>
         <button data-mode="week" class="${view.mode === 'week' ? 'on' : ''}">本周</button>
-        <button data-mode="total" class="${view.mode === 'total' ? 'on' : ''}">累计</button>
+        <button data-mode="total" class="${view.mode === 'total' ? 'on' : ''}" ${canTotal ? '' : 'disabled'}>累计</button>
       </div>
       <input class="search" id="q" placeholder="搜索成员 / 门阀 / 州" value="${esc(view.q)}">
     </div>
@@ -637,9 +526,8 @@ function renderRank() {
     <p class="hint">${view.mode === 'week' ? '本周战功为游戏内本周累计值。' : view.mode === 'total' ? '累计 = 每日增量之和；第一次出现时没有基线，按 0 计。' : '今日战功 = 今日累计 − 昨日本周累计；累计回落视为新一周。'}</p>`;
 }
 function emptyPanel() {
-  return `<div class="panel empty"><p>还没有数据</p>
-    <p class="hint">先在管理中心导入 CSV 或载入示例数据。</p>
-    <button class="btn primary" data-act="goAdmin">去管理中心</button></div>`;
+  return `<div class="panel empty"><p>暂时没有数据</p>
+    <p class="hint">数据还没发布，稍后再打开看看。</p></div>`;
 }
 
 /* ================= 渲染：门阀 ================= */
@@ -680,72 +568,6 @@ function renderClan() {
     </div>`;
 }
 
-/* ================= 渲染：管理 ================= */
-function renderAdmin() {
-  const el = $('#page-admin');
-  const today = dstr(new Date());
-  const ds = dates();
-  el.innerHTML = `
-    <div class="panel">
-      <div class="panelHead"><h2>导入数据</h2><span class="hint">CSV / TSV / 表格粘贴</span></div>
-      <p class="hint">列名包含「日期、成员、门阀、战功、助攻」会自动识别；没有日期列时用下面选的日期。</p>
-      <div class="row" style="margin-top:12px">
-        <label class="fld">数据日期<input type="date" id="impDate" value="${view.date || today}"></label>
-        <label class="fileBtn">选择文件<input type="file" id="impFile" accept=".csv,.tsv,.txt"></label>
-        <button class="btn" data-act="template">下载模板</button>
-      </div>
-      <textarea id="impText" placeholder="日期,成员,门阀,战功,助攻&#10;2026-11-27,曹操,魏·天策,18234,2100&#10;2026-11-27,关羽,蜀·卧龙,16520,1980"></textarea>
-      <div class="row end">
-        <label class="chk"><input type="checkbox" id="impOver" checked> 覆盖同日期数据</label>
-        <button class="btn primary" data-act="import">导入</button>
-      </div>
-      <p class="hint" id="impHint" style="margin-top:10px"></p>
-    </div>
-
-    <div class="panel">
-      <div class="panelHead"><h2>导入记录</h2><span class="hint">${db.imports.length} 次</span></div>
-      ${db.imports.length ? `<div class="tableWrap"><table><thead><tr><th class="l">日期</th><th>条数</th><th class="l">时间</th></tr></thead>
-        <tbody>${db.imports.slice(0, 12).map(i => `<tr><td class="l">${esc(i.date)}</td><td>${i.count}</td>
-          <td class="l muted">${new Date(i.at).toLocaleString('zh-CN')}</td></tr>`).join('')}</tbody></table></div>`
-        : '<p class="hint">还没有导入记录。</p>'}
-    </div>
-
-    <div class="panel">
-      <div class="panelHead"><h2>数据管理</h2><span class="hint">${db.records.length} 条 · ${ds.length} 天</span></div>
-      <div class="row">
-        <button class="btn" data-act="exportCsv">导出 CSV</button>
-        <button class="btn" data-act="exportJson">导出备份</button>
-        <label class="fileBtn">恢复备份<input type="file" id="impJson" accept=".json"></label>
-        <button class="btn" data-act="snapshot">恢复内置快照</button>
-        <button class="btn danger" data-act="clear">清空全部</button>
-      </div>
-      <p class="hint" style="margin-top:12px">数据只存在你这台设备的浏览器里（localStorage）。发给别人看是各自独立的一份，不会同步。</p>
-    </div>`;
-
-  const file = $('#impFile');
-  file.addEventListener('change', () => {
-    const f = file.files[0];
-    if (!f) return;
-    const r = new FileReader();
-    r.onload = () => { $('#impText').value = String(r.result); toast('已读取 ' + f.name); };
-    r.readAsText(f, 'utf-8');
-  });
-  const json = $('#impJson');
-  json.addEventListener('change', () => {
-    const f = json.files[0]; if (!f) return;
-    const r = new FileReader();
-    r.onload = () => {
-      try {
-        const o = JSON.parse(String(r.result));
-        if (!o || !Array.isArray(o.records)) throw new Error('格式不对');
-        db = { records: o.records, imports: o.imports || [], demo: false, seeded: true };
-        persist(); bump(); renderAll(); toast('已恢复 ' + o.records.length + ' 条');
-      } catch (e) { toast('恢复失败：' + e.message); }
-    };
-    r.readAsText(f, 'utf-8');
-  });
-}
-
 /* ================= 图表 ================= */
 function lineChart(points, labels) {
   if (!points.length) return '<p class="hint">暂无数据</p>';
@@ -777,72 +599,11 @@ function lineChart(points, labels) {
 }
 
 /* ================= 交互 ================= */
-function toast(msg) {
-  const t = $('#toast');
-  t.textContent = msg;
-  t.classList.add('on');
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.remove('on'), 2400);
-}
-function download(name, content, type) {
-  const blob = new Blob([content], { type });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 300);
-}
-function doImport() {
-  const text = $('#impText').value.trim();
-  if (!text) { toast('先粘贴内容或选择文件'); return; }
-  const date = $('#impDate').value || dstr(new Date());
-  const overwrite = $('#impOver').checked;
-  const { rows, skipped, error } = parseCSV(text);
-  if (error) { toast('解析失败：' + error); return; }
-  if (!rows.length) { toast('没有解析到有效行'); return; }
-  const recs = rows.map(r => ({ d: r.d || date, n: r.n, c: r.c, w: r.w, a: r.a, st: r.st, p: r.p }));
-  const touched = new Set(recs.map(r => r.d));
-  if (overwrite) db.records = db.records.filter(r => !touched.has(r.d));
-  db.records = db.records.concat(recs);
-  db.imports.unshift({ date: [...touched].sort().join(' ~ '), count: recs.length, at: new Date().toISOString() });
-  db.imports = db.imports.slice(0, 60);
-  db.snapshot = false;
-  persist(); bump();
-  $('#impText').value = '';
-  view.date = [...touched].sort().pop();
-  renderAll();
-  $('#impHint').textContent = `已导入 ${recs.length} 条${skipped ? `，跳过 ${skipped} 条（缺成员名）` : ''}。`;
-  toast(`导入成功：${recs.length} 条`);
-}
-
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-page]');
   if (b) { setPage(b.dataset.page); return; }
   const m = e.target.closest('#rankMode button');
-  if (m) { view.mode = m.dataset.mode; renderRank(); return; }
-  const act = e.target.closest('[data-act]');
-  if (!act) return;
-  const a = act.dataset.act;
-  if (a === 'goAdmin') setPage('admin');
-  else if (a === 'import') doImport();
-  else if (a === 'clear') {
-    if (!confirm('清空全部数据？包括导入记录，操作不可撤销。')) return;
-    db = { records: [], imports: [], snapshot: false };
-    persist(); bump(); view.date = null; renderAll(); toast('已清空');
-  } else if (a === 'snapshot') {
-    if (db.records.length && !confirm('这会替换当前所有数据，继续？')) return;
-    restoreSnapshot();
-  } else if (a === 'exportCsv') {
-    const head = '日期,成员,门阀,战功,助攻,势力值,所属州\n';
-    const body = db.records.slice().sort((x, y) => x.d.localeCompare(y.d) || x.n.localeCompare(y.n))
-      .map(r => [r.d, r.n, r.c, r.w, r.a, r.p || 0, r.st || ''].join(',')).join('\n');
-    download('同盟战功数据.csv', head + body, 'text/csv;charset=utf-8');
-  } else if (a === 'exportJson') {
-    download('同盟战功备份-' + dstr(new Date()) + '.json', JSON.stringify(db, null, 2), 'application/json');
-  } else if (a === 'template') {
-    const t = '日期,成员,门阀,战功,助攻\n' + dstr(new Date()) + ',曹操,魏·天策,18234,2100\n' + dstr(new Date()) + ',关羽,蜀·卧龙,16520,1980\n';
-    download('导入模板.csv', t, 'text/csv;charset=utf-8');
-  }
+  if (m && !m.disabled) { view.mode = m.dataset.mode; renderRank(); }
 });
 
 document.addEventListener('input', e => {
