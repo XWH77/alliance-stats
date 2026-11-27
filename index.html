@@ -314,6 +314,21 @@ html[data-theme="dark"] .seg button.on{background:#232b38;color:#fff}
 .linkBtn{background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;padding:4px 2px;white-space:nowrap}
 .linkBtn:hover{text-decoration:underline}
 #rankBody tr,.top5 li{cursor:pointer}
+/* 考勤 */
+.attBar{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.attBar label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--dim)}
+.attBar select,.attBar input{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:13px;outline:none;color:var(--text);width:100%}
+.attMeta{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;font-size:12px;color:var(--dim)}
+.attMeta b{color:var(--text)}
+.st{font-size:11px;padding:2px 8px;border-radius:999px;white-space:nowrap;display:inline-block}
+.st.double{background:rgba(18,161,80,.1);color:#12a150}
+.st.war{background:rgba(59,108,246,.1);color:#3b6cf6}
+.st.siege{background:rgba(245,158,11,.14);color:#b45309}
+.st.none{background:rgba(229,72,77,.08);color:#e5484d}
+.numUp{color:#12a150;font-weight:600}
+.numZero{color:var(--dim)}
+.attFilters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.attFilters select{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:7px 10px;font-size:12.5px;color:var(--text);outline:none}
 </style>
 </head>
 <body>
@@ -339,12 +354,14 @@ html[data-theme="dark"] .seg button.on{background:#232b38;color:#fff}
   <button data-page="dash" class="on">仪表盘</button>
   <button data-page="rank">全盟排行</button>
   <button data-page="clan">门阀排行</button>
+  <button data-page="att">考勤</button>
 </nav>
 
 <main>
   <section class="page on" id="page-dash"></section>
   <section class="page" id="page-rank"></section>
   <section class="page" id="page-clan"></section>
+  <section class="page" id="page-att"></section>
   <p class="foot" id="footInfo"></p>
 </main>
 
@@ -381,8 +398,8 @@ function load() {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const o = JSON.parse(raw);
-      if (o && Array.isArray(o.records) && o.records.length) {
-        db = { records: o.records, imports: o.imports || [], snapshot: !!o.snapshot, key: o.key || '' };
+      if (o && Array.isArray(o.records) && o.records.length && Array.isArray(o.snaps) && o.snaps.length) {
+        db = { records: o.records, snaps: o.snaps, imports: o.imports || [], snapshot: !!o.snapshot, key: o.key || '' };
         if (db.snapshot && db.key !== snapKey()) { seedFromSnapshot(); return; }
         return;
       }
@@ -396,11 +413,17 @@ function seedFromSnapshot() {
   const snap = window.SNAPSHOT;
   const days = snap && (Array.isArray(snap.days) ? snap.days : (Array.isArray(snap.rows) ? [{ date: snap.date, time: snap.time, rows: snap.rows }] : []));
   if (!days || !days.length) { persist(); return; }
+  const snaps = days.map(d => ({
+    id: `${d.date} ${d.time || ''}`.trim(),
+    date: d.date,
+    time: d.time || '',
+    records: d.rows.map(([n, c, w, a, st, p]) => ({ n, c, w, a, st, p }))
+  }));
+  const latest = new Map();
+  for (const s of snaps) latest.set(s.date, s);
   const records = [];
-  for (const day of days) {
-    for (const [n, c, w, a, st, p] of day.rows) records.push({ d: day.date, n, c, w, a, st, p });
-  }
-  db = { records, imports: [], snapshot: true, key: snapKey() };
+  for (const [date, s] of latest) for (const r of s.records) records.push({ d: date, ...r });
+  db = { records, snaps, imports: [], snapshot: true, key: snapKey() };
   persist();
 }
 
@@ -506,7 +529,8 @@ function renderAll() {
 function renderPage() {
   if (view.page === 'dash') renderDash();
   else if (view.page === 'rank') renderRank();
-  else renderClan();
+  else if (view.page === 'clan') renderClan();
+  else renderAtt();
 }
 
 /* ================= 渲染：仪表盘 ================= */
@@ -755,6 +779,143 @@ document.addEventListener('input', e => {
 });
 
 $('#dateSel').addEventListener('change', e => { view.date = e.target.value; renderAll(); });
+
+/* ================= 考勤 ================= */
+const att = { a: '', b: '', clan: '', status: '', q: '', thrW: 1, thrA: 1 };
+const ATT_STATUS = { double: '双项达标', war: '战场达标', siege: '攻城达标', none: '都未达标' };
+
+function attRows() {
+  const snaps = db.snaps || [];
+  if (snaps.length < 2) return null;
+  const ids = snaps.map(s => s.id);
+  if (!ids.includes(att.a)) att.a = snaps[snaps.length - 2].id;
+  if (!ids.includes(att.b)) att.b = snaps[snaps.length - 1].id;
+  const A = snaps.find(s => s.id === att.a), B = snaps.find(s => s.id === att.b);
+  const mA = new Map(A.records.map(r => [r.n, r]));
+  const mB = new Map(B.records.map(r => [r.n, r]));
+  const rows = [...mB.keys()].map(n => {
+    const a = mA.get(n), b = mB.get(n);
+    const dW = a ? Math.max(0, b.w - a.w) : null;
+    const dA = a ? Math.max(0, b.a - a.a) : null;
+    const war = dW !== null && dW >= Number(att.thrW);
+    const siege = dA !== null && dA >= Number(att.thrA);
+    return {
+      name: n, clan: b.c, w1: a ? a.w : null, w2: b.w, dW,
+      a1: a ? a.a : null, a2: b.a, dA, war, siege,
+      status: war && siege ? 'double' : war ? 'war' : siege ? 'siege' : 'none'
+    };
+  }).sort((x, y) => (y.dW || 0) - (x.dW || 0) || (y.dA || 0) - (x.dA || 0));
+  const left = [...mA.keys()].filter(n => !mB.has(n)).length;
+  return { A, B, rows, left, overlap: rows.filter(r => r.w1 !== null).length, same: A.id === B.id };
+}
+
+function renderAtt() {
+  const el = $('#page-att');
+  const snaps = db.snaps || [];
+  if (snaps.length < 2) {
+    el.innerHTML = `<div class="panel empty"><p>还缺一个时段的快照</p>
+      <p class="hint">考勤要对比两个时段，比如同一晚 20:00 和 22:00 各导出一份 CSV。</p></div>`;
+    return;
+  }
+  const d = attRows();
+  const { A, B, rows, left, overlap } = d;
+  const cnt = { double: 0, war: 0, siege: 0, none: 0 };
+  rows.forEach(r => cnt[r.status]++);
+  const pct = n => rows.length ? (n / rows.length * 100).toFixed(1) + '%' : '0%';
+  const clans = [...new Set(rows.map(r => r.clan))].sort();
+  const clanRows = clans.map(c => {
+    const list = rows.filter(r => r.clan === c);
+    return {
+      clan: c, n: list.length,
+      war: list.filter(r => r.war).length,
+      siege: list.filter(r => r.siege).length,
+      double: list.filter(r => r.status === 'double').length
+    };
+  }).sort((x, y) => (y.double / y.n) - (x.double / x.n));
+
+  el.innerHTML = `
+    <div class="panel">
+      <div class="panelHead"><h2>对比时段</h2><span class="hint">战功 / 助攻增量</span></div>
+      <div class="attBar">
+        <label>起始时段<select id="attA">${snaps.map(s => `<option value="${s.id}" ${s.id === att.a ? 'selected' : ''}>${s.date} ${s.time}</option>`).join('')}</select></label>
+        <label>结束时段<select id="attB">${snaps.map(s => `<option value="${s.id}" ${s.id === att.b ? 'selected' : ''}>${s.date} ${s.time}</option>`).join('')}</select></label>
+        <label>战场达标：战功增量 ≥<input id="thrW" type="number" min="0" value="${att.thrW}"></label>
+        <label>攻城达标：助攻增量 ≥<input id="thrA" type="number" min="0" value="${att.thrA}"></label>
+      </div>
+      <div class="attMeta" style="margin-top:10px">
+        <span>起始 <b>${overlap + left}</b> 人</span><span>结束 <b>${rows.length}</b> 人</span>
+        <span>重叠 <b>${overlap}</b></span><span>新增 <b>${rows.length - overlap}</b></span><span>离开 <b>${left}</b></span>
+        ${d.same ? '<span style="color:var(--bad)">两个时段相同，增量为 0</span>' : ''}
+      </div>
+      <p class="hint" style="margin-top:8px">需要新的时段？把那份 CSV 发我，加上就能在这里对比。</p>
+    </div>
+
+    <div class="cards">
+      <div class="card"><div class="lbl">双项达标率</div><div class="val">${pct(cnt.double)}</div><div class="cap">${cnt.double} / ${rows.length} 人</div></div>
+      <div class="card"><div class="lbl">战场达标率</div><div class="val">${pct(cnt.war + cnt.double)}</div><div class="cap">战功增长达标</div></div>
+      <div class="card"><div class="lbl">攻城达标率</div><div class="val">${pct(cnt.siege + cnt.double)}</div><div class="cap">助攻增长达标</div></div>
+      <div class="card"><div class="lbl">都未达标</div><div class="val">${cnt.none}</div><div class="cap">需要提醒</div></div>
+    </div>
+
+    <div class="panel tableWrap">
+      <div class="panelHead"><h2>门阀达标率</h2><span class="hint">${A.time} → ${B.time}</span></div>
+      <table>
+        <thead><tr><th class="l">门阀</th><th>人数</th><th>战场</th><th>攻城</th><th>双项</th><th>双项率</th></tr></thead>
+        <tbody>${clanRows.map(c => `<tr>
+          <td class="l">${esc(c.clan)}</td><td>${c.n}</td>
+          <td class="muted">${c.war + c.double}</td><td class="muted">${c.siege + c.double}</td>
+          <td>${c.double}</td><td class="muted">${(c.double / c.n * 100).toFixed(1)}%</td></tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="panelHead"><h2>成员明细</h2><span class="hint">${rows.length} 人</span></div>
+      <div class="attFilters">
+        <select id="attClan"><option value="">全部门阀</option>${clans.map(c => `<option ${c === att.clan ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+        <select id="attStatus">
+          <option value="">全部状态</option>
+          ${Object.keys(ATT_STATUS).map(k => `<option value="${k}" ${att.status === k ? 'selected' : ''}>${ATT_STATUS[k]}</option>`).join('')}
+        </select>
+        <input class="search" id="attQ" placeholder="搜索成员" value="${esc(att.q)}" style="flex:1;min-width:120px">
+      </div>
+      <div class="tableWrap">
+        <table>
+          <thead><tr><th class="l">成员</th><th>战功</th><th>助攻</th><th>状态</th></tr></thead>
+          <tbody id="attBody">${rows.map(r => `
+            <tr data-name="${esc(r.name + ' ' + r.clan)}" data-clan="${esc(r.clan)}" data-st="${r.status}">
+              <td class="l"><div>${esc(r.name)}${r.w1 === null ? ' <span class="tag">新增</span>' : ''}</div>
+                <div class="muted" style="font-size:11.5px">${esc(r.clan)}</div></td>
+              <td>${r.dW === null ? '<span class="muted">—</span>' : `<span class="${r.dW > 0 ? 'numUp' : 'numZero'}">+${fmt(r.dW)}</span>
+                <div class="muted" style="font-size:11px">${fmt(r.w1)} → ${fmt(r.w2)}</div>`}</td>
+              <td>${r.dA === null ? '<span class="muted">—</span>' : `<span class="${r.dA > 0 ? 'numUp' : 'numZero'}">+${fmt(r.dA)}</span>
+                <div class="muted" style="font-size:11px">${fmt(r.a1)} → ${fmt(r.a2)}</div>`}</td>
+              <td><span class="st ${r.status}">${ATT_STATUS[r.status]}</span></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+  $('#attA').addEventListener('change', e => { att.a = e.target.value; renderAtt(); });
+  $('#attB').addEventListener('change', e => { att.b = e.target.value; renderAtt(); });
+  $('#thrW').addEventListener('change', e => { att.thrW = Math.max(0, Number(e.target.value) || 0); renderAtt(); });
+  $('#thrA').addEventListener('change', e => { att.thrA = Math.max(0, Number(e.target.value) || 0); renderAtt(); });
+  $('#attClan').addEventListener('change', e => { att.clan = e.target.value; attFilter(); });
+  $('#attStatus').addEventListener('change', e => { att.status = e.target.value; attFilter(); });
+  $('#attQ').addEventListener('input', e => { att.q = e.target.value; attFilter(); });
+  attFilter();
+}
+
+function attFilter() {
+  const q = (att.q || '').toLowerCase();
+  document.querySelectorAll('#attBody tr').forEach(tr => {
+    const okQ = !q || tr.dataset.name.toLowerCase().includes(q);
+    const okC = !att.clan || tr.dataset.clan === att.clan;
+    const okS = !att.status || tr.dataset.st === att.status;
+    tr.hidden = !(okQ && okC && okS);
+  });
+}
 
 /* ================= 弹层 ================= */
 function openModal(title, html) {
