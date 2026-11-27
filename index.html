@@ -369,7 +369,12 @@ let db = { records: [], imports: [], snapshot: false };
 let view = { page: 'dash', date: null, mode: 'week', q: '' };
 let S = null;                       // 派生缓存
 
-const snapKey = () => window.SNAPSHOT ? window.SNAPSHOT.date + ':' + (window.SNAPSHOT.time || '') + ':' + window.SNAPSHOT.rows.length : '';
+const snapKey = () => {
+  const s = window.SNAPSHOT;
+  if (!s) return '';
+  if (Array.isArray(s.days)) return s.days.map(d => `${d.date}:${d.time || ''}:${d.rows.length}`).join('|');
+  return `${s.date}:${s.time || ''}:${(s.rows || []).length}`;
+};
 
 function load() {
   try {
@@ -389,11 +394,13 @@ function load() {
 /* 内置快照（data.js） */
 function seedFromSnapshot() {
   const snap = window.SNAPSHOT;
-  if (!snap || !Array.isArray(snap.rows)) { persist(); return; }
-  db = {
-    records: snap.rows.map(([n, c, w, a, st, p]) => ({ d: snap.date, n, c, w, a, st, p })),
-    imports: [], snapshot: true, key: snapKey()
-  };
+  const days = snap && (Array.isArray(snap.days) ? snap.days : (Array.isArray(snap.rows) ? [{ date: snap.date, time: snap.time, rows: snap.rows }] : []));
+  if (!days || !days.length) { persist(); return; }
+  const records = [];
+  for (const day of days) {
+    for (const [n, c, w, a, st, p] of day.rows) records.push({ d: day.date, n, c, w, a, st, p });
+  }
+  db = { records, imports: [], snapshot: true, key: snapKey() };
   persist();
 }
 
@@ -481,9 +488,19 @@ function renderAll() {
   badge.style.display = ds.length ? '' : 'none';
   badge.textContent = db.snapshot ? `快照 ${ds[ds.length-1]}` : '本地数据';
   badge.classList.toggle('demo', db.snapshot);
-  const t = (window.SNAPSHOT && window.SNAPSHOT.time) || '';
+  const s = window.SNAPSHOT || {};
+  let info = '数据尚未发布';
+  if (ds.length) {
+    if (Array.isArray(s.days) && s.days.length > 1) {
+      const f = s.days[0], l = s.days[s.days.length - 1];
+      info = `数据快照 ${f.date} ${f.time || ''} → ${l.date} ${l.time || ''}`;
+    } else {
+      info = `数据快照 ${ds[ds.length-1]}${s.time ? ' ' + s.time : ''}`;
+    }
+    info += ' · 仅供同盟内部查看';
+  }
   const fi = $('#footInfo');
-  if (fi) fi.textContent = ds.length ? `数据快照 ${ds[ds.length-1]}${t ? ' ' + t : ''} · 仅供同盟内部查看` : '数据尚未发布';
+  if (fi) fi.textContent = info;
   renderPage();
 }
 function renderPage() {
@@ -513,7 +530,7 @@ function renderDash() {
   const bars = [...byClan.values()].sort((x, y) => y.k - x.k);
   const maxBar = Math.max(...bars.map(b => b.k), 1);
   const top = list.slice().sort((x, y) => (hasBase ? y.inc - x.inc : y.w - x.w)).slice(0, 5);
-  const last7 = ds.slice(-7);
+  const last7 = ds.slice(-7).filter(d => snapshot(d).prev);
   const trend = last7.map(d => [...snapshot(d).members.values()].reduce((s, m) => s + m.inc, 0));
 
   let cards, chartPanel, changePanel;
@@ -530,7 +547,9 @@ function renderDash() {
         <div class="cap">有战功增量</div></div>
       <div class="card"><div class="lbl">门阀总数</div><div class="val" data-v="${clans.size}">${clans.size}</div>
         <div class="cap">${view.date} ${WEEK[new Date(view.date + 'T00:00:00').getDay()]}</div></div>`;
-    chartPanel = `<div class="panel"><div class="panelHead"><h2>近 7 日战功趋势</h2><span class="hint">当日增量</span></div>${lineChart(trend, last7)}</div>`;
+    chartPanel = trend.length >= 2
+      ? `<div class="panel"><div class="panelHead"><h2>近 7 日战功趋势</h2><span class="hint">当日增量</span></div>${lineChart(trend, last7)}</div>`
+      : `<div class="panel"><div class="panelHead"><h2>近 7 日战功趋势</h2><span class="hint">当日增量</span></div><p class="hint">目前只有一天的增量，明天再更新一次就能画出趋势。</p></div>`;
     const before = new Set(snapshot(snap.prev).members.keys()), now = new Set(snap.members.keys());
     const joined = [...now].filter(n => !before.has(n)), left = [...before].filter(n => !now.has(n));
     changePanel = `<div class="panel"><div class="panelHead"><h2>人员变动</h2><span class="hint">对比 ${snap.prev}</span></div>
