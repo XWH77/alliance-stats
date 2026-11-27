@@ -329,6 +329,13 @@ html[data-theme="dark"] .seg button.on{background:#232b38;color:#fff}
 .numZero{color:var(--dim)}
 .attFilters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
 .attFilters select{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:7px 10px;font-size:12.5px;color:var(--text);outline:none}
+/* 考勤任务卡片 */
+.tasks{display:flex;flex-direction:column;gap:10px}
+.taskCard{text-align:left;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px;cursor:pointer;transition:.18s;font:inherit;color:inherit;width:100%}
+.taskCard:hover{border-color:var(--accent);transform:translateY(-1px)}
+.tLine{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.tName{font-size:14px;font-weight:650}
+.tMeta{font-size:12px;color:var(--dim);line-height:1.7}
 </style>
 </head>
 <body>
@@ -399,7 +406,7 @@ function load() {
     if (raw) {
       const o = JSON.parse(raw);
       if (o && Array.isArray(o.records) && o.records.length && Array.isArray(o.snaps) && o.snaps.length) {
-        db = { records: o.records, snaps: o.snaps, imports: o.imports || [], snapshot: !!o.snapshot, key: o.key || '' };
+        db = { records: o.records, snaps: o.snaps, tasks: o.tasks || [], imports: o.imports || [], snapshot: !!o.snapshot, key: o.key || '' };
         if (db.snapshot && db.key !== snapKey()) { seedFromSnapshot(); return; }
         return;
       }
@@ -423,7 +430,7 @@ function seedFromSnapshot() {
   for (const s of snaps) latest.set(s.date, s);
   const records = [];
   for (const [date, s] of latest) for (const r of s.records) records.push({ d: date, ...r });
-  db = { records, snaps, imports: [], snapshot: true, key: snapKey() };
+  db = { records, snaps, tasks: Array.isArray(snap.tasks) ? snap.tasks : [], imports: [], snapshot: true, key: snapKey() };
   persist();
 }
 
@@ -780,6 +787,78 @@ document.addEventListener('input', e => {
 
 $('#dateSel').addEventListener('change', e => { view.date = e.target.value; renderAll(); });
 
+/* ================= 考勤任务 ================= */
+function taskRows(t) {
+  const snaps = db.snaps || [];
+  const A = snaps.find(s => s.id === t.a);
+  const B = snaps.find(s => s.id === t.b);
+  if (!A || !B) return null;
+  const mA = new Map(A.records.map(r => [r.n, r]));
+  const rows = B.records.filter(r => r.c === t.clan).map(b => {
+    const a = mA.get(b.n);
+    const dW = a ? Math.max(0, b.w - a.w) : null;
+    const dA = a ? Math.max(0, b.a - a.a) : null;
+    const war = dW !== null && dW >= (t.thrW ?? 1);
+    const siege = dA !== null && dA >= (t.thrA ?? 1);
+    return {
+      name: b.n, clan: b.c, w1: a ? a.w : null, w2: b.w, dW,
+      a1: a ? a.a : null, a2: b.a, dA, war, siege,
+      status: war && siege ? 'double' : war ? 'war' : siege ? 'siege' : 'none'
+    };
+  }).sort((x, y) => (y.dA || 0) - (x.dA || 0));
+  const cnt = { double: 0, war: 0, siege: 0, none: 0 };
+  rows.forEach(r => cnt[r.status]++);
+  return { rows, cnt, A, B };
+}
+
+function taskCard(t) {
+  const d = taskRows(t);
+  if (!d) return '';
+  const engaged = d.rows.filter(r => (r.dA || 0) > 0).length;
+  return `<button class="taskCard" data-task="${t.id}">
+    <div class="tLine"><span class="tName">${esc(t.name)}</span><span class="tag">${esc(t.clan)}</span></div>
+    <div class="tMeta">${esc(t.a)} → ${esc(t.b)} · ${d.rows.length} 人</div>
+    <div class="tMeta">参战 ${engaged} · 未参战 ${d.rows.length - engaged} · 助攻达标 ${d.cnt.siege + d.cnt.double}</div>
+  </button>`;
+}
+
+function showTask(id) {
+  const t = (db.tasks || []).find(x => x.id === id);
+  if (!t) return;
+  const d = taskRows(t);
+  if (!d) { openModal('考勤任务', '<p class="hint">找不到对应的两个时段。</p>'); return; }
+  const { rows, cnt, A, B } = d;
+  const rate = rows.length ? (cnt.double / rows.length * 100).toFixed(1) : '0.0';
+  const idle = rows.filter(r => (r.dA || 0) <= 0);
+  const engaged = rows.length - idle.length;
+  openModal(t.name, `
+    <div class="mHead">
+      <div class="mName">${esc(t.name)}</div>
+      <div class="hint">${esc(t.clan)} · ${esc(A.id)} → ${esc(B.id)}</div>
+    </div>
+    <div class="mGrid">
+      <div><span class="hint">参与人数</span><b>${rows.length}</b></div>
+      <div><span class="hint">双项达标率</span><b>${rate}%</b></div>
+      <div><span class="hint">战场达标</span><b>${cnt.war + cnt.double}</b></div>
+      <div><span class="hint">攻城达标</span><b>${cnt.siege + cnt.double}</b></div>
+    </div>
+    <p class="hint" style="margin-top:10px">参战（助攻有增长）<b style="color:var(--text)">${engaged}</b> 人 · 未参战 <b style="color:var(--text)">${idle.length}</b> 人</p>
+    ${idle.length ? `<div class="chips" style="margin-top:8px">${idle.map(r => `<span class="tag">${esc(r.name)}</span>`).join('')}</div>` : ''}
+    <div class="tableWrap" style="margin-top:14px">
+      <table>
+        <thead><tr><th class="l">成员</th><th>战功</th><th>助攻</th><th>状态</th></tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td class="l">${esc(r.name)}</td>
+          <td>${r.dW === null ? '<span class="muted">—</span>' : `<span class="${r.dW > 0 ? 'numUp' : 'numZero'}">+${fmt(r.dW)}</span>`}</td>
+          <td>${r.dA === null ? '<span class="muted">—</span>' : `<span class="${r.dA > 0 ? 'numUp' : 'numZero'}">+${fmt(r.dA)}</span>`}</td>
+          <td><span class="st ${r.status}">${ATT_STATUS[r.status]}</span></td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>
+    <p class="hint" style="margin-top:10px">门槛：战功增量 ≥ ${t.thrW ?? 1}，助攻增量 ≥ ${t.thrA ?? 1}。这段战功几乎没结算，主要看助攻。</p>
+  `);
+}
+
 /* ================= 考勤 ================= */
 const att = { a: '', b: '', clan: '', status: '', q: '', thrW: 1, thrA: 1 };
 const ATT_STATUS = { double: '双项达标', war: '战场达标', siege: '攻城达标', none: '都未达标' };
@@ -833,7 +912,13 @@ function renderAtt() {
     };
   }).sort((x, y) => (y.double / y.n) - (x.double / x.n));
 
-  el.innerHTML = `
+  const tasks = db.tasks || [];
+  const taskPanel = tasks.length ? `<div class="panel">
+      <div class="panelHead"><h2>考勤任务</h2><span class="hint">${tasks.length} 个</span></div>
+      <div class="tasks">${tasks.map(taskCard).join('')}</div>
+    </div>` : '';
+
+  el.innerHTML = `${taskPanel}
     <div class="panel">
       <div class="panelHead"><h2>对比时段</h2><span class="hint">战功 / 助攻增量</span></div>
       <div class="attBar">
@@ -1113,6 +1198,8 @@ document.addEventListener('click', e => {
     if (a === 'savePoster') { savePoster(); return; }
     if (a === 'watch') { showWatch(act.dataset.kind); return; }
   }
+  const tk = e.target.closest('[data-task]');
+  if (tk) { showTask(tk.dataset.task); return; }
   const mb = e.target.closest('[data-member]');
   if (mb) showMember(mb.dataset.member);
 });
