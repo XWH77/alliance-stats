@@ -369,7 +369,7 @@ let db = { records: [], imports: [], snapshot: false };
 let view = { page: 'dash', date: null, mode: 'week', q: '' };
 let S = null;                       // 派生缓存
 
-const snapKey = () => window.SNAPSHOT ? window.SNAPSHOT.date + ':' + window.SNAPSHOT.rows.length : '';
+const snapKey = () => window.SNAPSHOT ? window.SNAPSHOT.date + ':' + (window.SNAPSHOT.time || '') + ':' + window.SNAPSHOT.rows.length : '';
 
 function load() {
   try {
